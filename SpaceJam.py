@@ -1,14 +1,21 @@
 from direct.showbase.ShowBase import ShowBase
 import DefensePaths as DefensePaths
 import SpaceJamClasses
-from panda3d.core import CollisionTraverser, CollisionHandlerPusher, CollisionSphere, CollisionNode
+from panda3d.core import CollisionTraverser, CollisionHandlerPusher
 
 class MyApp(ShowBase):
 
     def __init__(self):
         ShowBase.__init__(self)
         self.SetupScene()
-        self.InitializeDefenses()
+        self.InitializeDefenses() 
+        self.SetCamera()
+        self.cTrav = CollisionTraverser()
+        self.cTrav.traverse(self.render)
+        self.pusher = CollisionHandlerPusher()
+        self.pusher.addCollider(self.Spaceship.collisionNode, self.Spaceship.modelNode)
+        self.cTrav.addCollider(self.Spaceship.collisionNode, self.pusher)
+        self.cTrav.showCollisions(self.render)
     
         
         
@@ -20,22 +27,11 @@ class MyApp(ShowBase):
             self.Planet4 = SpaceJamClasses.Planet(self.loader, "./Assets/Planets/Planet4.x", self.render, "Planet4", "./Assets/Planets/Planet4.png", (1500, 5000, 67), 100)
             self.Planet5 = SpaceJamClasses.Planet(self.loader, "./Assets/Planets/Planet5.x", self.render, "Planet5", "./Assets/Planets/Planet5.png", (2000, 5000, 67), 100)
             self.Planet6 = SpaceJamClasses.Planet(self.loader, "./Assets/Planets/Planet6.x", self.render, "Planet6", "./Assets/Planets/Planet6.png", (2500, 5000, 67), 100)
-            self.Spaceship = SpaceJamClasses.Spaceship(self.loader,"./Assets/Spaceships/Dumbledore.egg", self.render, "Spaceship", "./Assets/Spaceships/spacejet_C.png", (-1000, 4000, 67), 50)
-            self.Space_Station = SpaceJamClasses.Space_Station(self.loader, "./Assets/Space Station/spaceStation.egg", self.render, "Space_Station", "./Assets/Space Station/SpaceStation1_Dif2.png", (2000, 3000, 67), 100)
+            self.Spaceship = SpaceJamClasses.Spaceship(self.loader, self.taskMgr, self.accept, "./Assets/Spaceships/Dumbledore.egg", self.render, "Spaceship", "./Assets/Spaceships/spacejet_C.png", (-1000, 4000, 67), 50)
+            self.Space_Station = SpaceJamClasses.Space_Station(self.loader, self.taskMgr, "./Assets/Space Station/spaceStation.egg", self.render, "Space_Station", "./Assets/Space Station/SpaceStation1_Dif2.png", (2000, 3000, 67), 100)
 
-            self.cTrav = CollisionTraverser()
-            self.cTrav.traverse(self.render)
-            self.pusher = CollisionHandlerPusher()
-            self.pusher.addCollider(self.Spaceship.collisionNode, self.Spaceship.modelNode)
-            self.cTrav.addCollider(self.Spaceship.collisionNode, self.pusher)
-            self.cTrav.showCollisions(self.render)
+            
 
-    def addCollision(self, obj):
-        collision_sphere = CollisionSphere(0, 0, 0, 10) 
-        collision_node = CollisionNode(obj.name + "-collider")
-        collision_node.addSolid(collision_sphere)
-        obj.collisionNode = self.render.attachNewNode(collision_node)
-        self.cTrav.addCollider(obj.collisionNode, self.pusher)
             
     def DrawBaseballSeams(self, centralObject, droneName, step, numSeams, radius = 1):
             unitVec = DefensePaths.BaseballSeams(step, numSeams, B = 0.4)
@@ -59,15 +55,10 @@ class MyApp(ShowBase):
             self.DrawBaseballSeams(self.Space_Station, nickname, j, fullcycle, 2)
 
 
-    
-    
-
-
-    
-def SetCamera(self):
-    self.disableMouse()
-    self.camera.reparentTo(self.Spaceship.modelNode)
-    self.camera.setPos(0, 1, 0)
+    def SetCamera(self):
+        self.disableMouse()
+        self.camera.reparentTo(self.Spaceship.modelNode)
+        self.camera.setPos(0, 1, 0)
    
             
 
