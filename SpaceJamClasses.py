@@ -1,17 +1,18 @@
-from inspect import currentframe
-
 from direct.gui.OnscreenImage import OnscreenImage
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import *
-from panda3d.core import Loader, NodePath, Vec3
+from panda3d.core import Loader, NodePath, Vec3, CollisionNode, CollisionSphere, BitMask32 
 from direct.task import Task
-from direct.task.Task import TaskManager
 from panda3d.core import TransparencyAttrib
 from CollideObjectBase import InverseSphereCollideObject, CapsuleCollideableObject, SphereCollideObj 
-from typing import Callable
 from direct.showbase import ShowBaseGlobal
+from panda3d.core import CollisionHandlerEvent
+from direct.interval.LerpInterval import LerpFunc
+from direct.particles.ParticleEffect import ParticleEffect
+import re
 
-class Universe(ShowBase):
+
+class UniverseModel(ShowBase):
        def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
               self.modelNode = loader.loadModel(modelPath)
               self.modelNode.reparentTo(parentNode)
@@ -33,7 +34,7 @@ class Universe(InverseSphereCollideObject):
               self.modelNode.setTexture(tex, 1)
 
 
-class Planet(ShowBase):
+class PlanetModel(ShowBase):
         def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
             self.modelNode = loader.loadModel(modelPath)
             self.modelNode.reparentTo(parentNode)
@@ -48,13 +49,22 @@ class Planet(ShowBase):
 class Planet(SphereCollideObj):
     def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
         super(Planet, self).__init__(loader, modelPath, parentNode, nodeName, colRadius=1.0, colPositionVec=Vec3(0, 0, 0))
+        self.collisionNode.reparentTo(self.modelNode)
+        self.collisionNode.setPos(0, 0, 0)
+        self.collisionNode.node().clearSolids()
+        self.collisionNode.node().addSolid(CollisionSphere(0, 0, 0, 2.0))
         self.modelNode.setPos(posVec)
         self.modelNode.setScale(scaleVec)
         tex = loader.loadTexture(texPath)
         self.modelNode.setTexture(tex, 1)
-            
+        self.collisionNode = self.modelNode.attachNewNode(CollisionNode(nodeName + "_cnode"))
+        self.collisionNode.node().addSolid(CollisionSphere(0, 0, 0, 2.0))
+        self.collisionNode.show()
+        self.collisionNode.node().setIntoCollideMask(BitMask32.bit(1))
+        self.collisionNode.node().setFromCollideMask(BitMask32.allOff())
 
-class Drone(ShowBase):
+
+class DroneModel(ShowBase):
     droneCount = 0
     def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
             self.modelNode = loader.loadModel(modelPath)
@@ -69,15 +79,22 @@ class Drone(ShowBase):
 
 class Drone(SphereCollideObj):
     droneCount = 0
-    def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float, colRadius: float = 1.0):
-        super(Drone, self).__init__(loader, modelPath, parentNode, nodeName, colRadius)
+    def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float, colRadius: float = 3.0):
+        super(Drone, self).__init__(loader, modelPath, parentNode, nodeName, (0, 0, 0), colRadius)
         self.modelNode.setPos(posVec)
         self.modelNode.setScale(scaleVec)
         tex = loader.loadTexture(texPath)
         self.modelNode.setTexture(tex, 1)
+        self.collisionNode.node().setIntoCollideMask(BitMask32.bit(1))
+        self.collisionNode.node().setFromCollideMask(BitMask32.allOff())
+        self.collisionNode.reparentTo(self.modelNode)
+        self.collisionNode.setName(nodeName)
+        self.collisionNode.setPos(0, 0, 0)
 
 
-class Spaceship(ShowBase):
+
+
+class SpaceshipModel(ShowBase):
        def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
               self.modelNode = loader.loadModel(modelPath)
               self.modelNode.reparentTo(parentNode)
@@ -91,9 +108,50 @@ class Spaceship(ShowBase):
               self.modelNode.setName(nodeName)
               tex = loader.loadTexture(texPath)
               self.modelNode.setTexture(tex, 1)
+
+              self.cntExplode = 0
+              self.explodeIntervals = {}
+              self.traverser = ShowBaseGlobal.cTrav
+              self.handler = CollisionHandlerEvent()
+              self.handler.addInPattern('into')
+              self.accept('into', self.HandleInto)
              
 
               self.SetKeyBindings()
+
+
+       
+       def DestroyObject(self, hitID, hitPosition):
+              nodeID = self.render.find(hitID)
+              nodeID.detachNode()
+
+              self.explodeNode.setPos(hitPosition)
+              self.Explode()
+
+       
+       def Explode(self):
+              self.cntExplode += 1
+              tag = 'particles-' + str(self.cntExplode)
+
+              self.explodeIntervals[tag] = LerpFunc(self.ExplodeLight, duration = 4.0)
+              self.explodeIntervals[tag].start()
+
+
+       def ExplodeLight(self, t):
+              if t == 1.0 and self.explodeEffect:
+                     self.explodeEffect.disable()
+
+              elif t == 0:
+                     self.explodeEffect.start(self.explodeNode)
+
+       
+       def SetParticles(self):
+              self.enableParticles()
+              self.explodeEffect = ParticleEffect()
+              self.explodeEffect.loadConfig("./Assets/ParticleEffects/Explosions/basic_xpld_efx.ptf")
+              self.explodeEffect.setScale(20)
+              self.explodeNode = self.render.attachNewNode('ExplosionEffects')
+               
        
        def Thrust(self, keyDown):
               if keyDown:
@@ -196,6 +254,7 @@ class Spaceship(ShowBase):
                      currentMissile = Missile(self.loader, './Assets/Phaser/phaser.egg', self.render, tag, posVec, 4.0)
                      Missile.Intervals[tag] = currentMissile.modelNode.posInterval(2.0, travVec, startPos=posVec, fluid=1)
                      Missile.Intervals[tag].start()
+                     self.traverser.addCollider(currentMissile.collisionNode, self.handler)
 
               else:
                      if not self.taskMgr.hasTaskNamed('reload'):
@@ -225,14 +284,16 @@ class Spaceship(ShowBase):
                             del Missile.cNodes[i]
                             del Missile.collisionSolids[i]
                             print(i + " has reached the end of its fire solution.")
-                     if currentframe - Missile.lifetimes[i] > Missile.maxLifetime:
+                     
+                     current_time = ShowBaseGlobal.globalClock.getFrameTime()
+                     if current_time - Missile.lifetime[i] > Missile.maxLifetime:
                             Missile.cNodes[i].detachNode()
                             Missile.fireModels[i].detachNode()
                             del Missile.Intervals[i]
                             del Missile.fireModels[i]
                             del Missile.cNodes[i]
                             del Missile.collisionSolids[i]
-                            del Missile.lifetimes[i]
+                            del Missile.lifetime[i]
                             print(i + " expired.")      
                             break
                      return Task.cont
@@ -263,46 +324,18 @@ class Missile(SphereCollideObj):
               Missile.collisionSolids[nodeName] = self.collisionNode.node().getSolid(0)
               Missile.cNodes[nodeName].show()
               print("Fire torpedo #" + str(Missile.missileCount))
-       
-       
-       
-       
-class Spaceship(InverseSphereCollideObject):
-    def __init__( self, loader: Loader, taskMgr: TaskManager, accept: Callable[[str, Callable], None], modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
-        super(Spaceship, self).__init__(loader, modelPath, parentNode, nodeName, Vec3(0, 0, 0), 1)
-        self.taskMgr = taskMgr
-        self.accept = accept
-        self.modelNode.setPos(posVec) 
-        self.modelNode.setScale(scaleVec)
-        self.modelNode.setName(nodeName)
-        tex = loader.loadTexture(texPath)
-        self.modelNode.setTexture(tex, 1)
-
-
-              
-
+              self.collisionNode.node().setFromCollideMask(BitMask32.bit(1))
+              self.collisionNode.node().setIntoCollideMask(BitMask32.allOff())
+              self.collisionNode.reparentTo(self.modelNode)
+              self.collisionNode.setName(nodeName)
+              self.collisionNode.setPos(0, 0, 0)
 
        
-class Missile(SphereCollideObj):
-       fireModels = {}
-       cNodes = {}
-       collisionSolids = {}
-       Intervals = {}
-       missilecount = 0
-       def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, posVec: Vec3, scaleVec: float):
-              super(Missile, self).__init__(loader, modelPath, parentNode, nodeName, Vec3(0, 0, 0), 3.0)
-              self.modelNode.setPos(posVec)
-              self.modelNode.setScale(scaleVec)
-              Missile.missileCount += 1
-              Missile.fireModels[nodeName] = self.modelNode
-              Missile.cNodes[nodeName] = self.collisionNode
-              Missile.collisionSolids[nodeName] = self.collisionNode.node().getSolid(0)
-              Missile.cNodes[nodeName].show()
-              print("Fire torpedo #" + str(Missile.missileCount))
+       
 
        
 
-class Space_Station(ShowBase):
+class Space_StationModel(ShowBase):
        def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
               self.modelNode = loader.loadModel(modelPath)
               self.modelNode.reparentTo(parentNode)
@@ -316,7 +349,7 @@ class Space_Station(ShowBase):
 
 class Space_Station(CapsuleCollideableObject):
     def __init__(self, loader: Loader,  modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
-        super(Space_Station, self).__init__(loader, modelPath, parentNode, nodeName, texPath, scaleVec, 1, -1, -5, 5, 10)
+        super(Space_Station, self).__init__(loader, modelPath, parentNode, nodeName, 1, -1, -5, 5, 10, 10, 5)
         self.modelNode.setPos(posVec)
         self.modelNode.setScale(scaleVec)
         self.modelNode.setName(nodeName)
