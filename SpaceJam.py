@@ -10,6 +10,7 @@ from direct.interval.LerpInterval import LerpFunc
 from panda3d.core import Vec3
 from direct.showbase import ShowBaseGlobal
 from direct.gui.OnscreenText import OnscreenText
+from panda3d.core import LineSegs, NodePath
 class MyApp(ShowBase):
 
     def __init__(self):
@@ -23,6 +24,7 @@ class MyApp(ShowBase):
         self.cTrav.addCollider(self.Spaceship.collisionNode, self.pusher)
         self.cTrav.showCollisions(self.render)
         self.eventHandler = CollisionHandlerEvent()
+        ShowBaseGlobal.base.cTrav = self.cTrav
         ShowBaseGlobal.base.eventHandler = self.eventHandler
         self.eventHandler.addInPattern('%fn-into-%in')
         self.accept('%fn-into-%in', self.HandleInto)
@@ -36,6 +38,7 @@ class MyApp(ShowBase):
         self.canLand = False
         self.currentPlanet = None
         self.isLanded = False
+        self.accept("l", self.ToggleLanding)
         self.taskMgr.add(self.ApplyGravity, "ApplyGravity")
         self.accept("l", self.Land)
         self.accept("k", self.TakeOff)
@@ -45,6 +48,13 @@ class MyApp(ShowBase):
         self.accept("t", self.ToggleLock)
         self.taskMgr.add(self.UpdateLockUI, "UpdateLockOn")
         self.taskMgr.add(self.UpdateMissiles, "UpdateMissiles")
+        self.takeoffTimer = 0
+        self.accept("tab", self.NextTarget)
+        self.lockTargets = []
+        self.lockIndex = -1
+        self.lockBox = self.createLockBox()
+        self.lockBox.reparentTo(self.render)
+        self.lockBox.hide()
 
     
     def UpdateMissiles(self, task):
@@ -57,59 +67,220 @@ class MyApp(ShowBase):
 
             if missileNode.isEmpty():
                 continue
+            
+            if not missileNode.hasPythonTag("velocity") is None:
+                missileNode.setPythonTag("velocity", Vec3(0, 0, 0))
 
-            missile = missileNode  
+            vel = missileNode.getPythonTag("velocity")
+            missilePos = missileNode.getPos()
 
-        
-            if hasattr(missile, "velocity"):
-                missile.setFluidPos(missile.getPos() + missile.velocity * dt)
+            if self.lockOn and self.IsDrone(self.currentTarget):
+
+                targetPos = self.currentTarget.getPos()
+
+                direction = targetPos - missilePos
+                distance = direction.length()
+
+                if distance > 0:
+                    direction.normalize()
+
+                turnStrength = 5.0
+                vel += direction * turnStrength * dt
+
+                maxSpeed = 150
+                if vel.length() > maxSpeed:
+                    vel.normalize()
+                    vel *= maxSpeed
+
+            missileNode.setPythonTag("velocity", vel)
+
+            missileNode.setPos(missilePos + vel * dt)
 
         return task.cont
+    
+
+
+    def ToggleLanding(self):
+
+        ship = self.Spaceship.modelNode
+        shipPos = ship.getPos()
+
+        for planet in self.planets:
+            dist = (planet.modelNode.getPos() - shipPos).length()
+
+            if dist < 150:
+                self.isLanded = not self.isLanded
+
+                if self.isLanded:
+                    print("LANDED")
+                    self.velocity = Vec3(0, 0, 0)
+            else:
+                print("TAKEOFF")
+
+            return
          
 
 
     
     def ToggleLock(self):
-         self.lockOn = not self.lockOn
 
-         if not self.lockOn:
-              self.currentTarget = None
-              self.lockText.setText("")
-              print("Lock OFF")
-         else:
-              print("Lock ON")
+        self.lockOn = not self.lockOn
 
+        if not self.lockOn:
+            self.currentTarget = None
+            self.lockTargets = []
+            self.lockIndex = -1
+            self.lockText.setText("LOCK OFF")
+        else:
+            self.lockText.setText("LOCK ON")
     
     def UpdateLockUI(self, task):
-         if not self.lockOn:
-              return task.cont
-         
-         shipPos = self.Spaceship.modelNode.getPos()
 
-         closest = None
-         closestDist = float('inf')
+        if not self.lockOn:
+            return task.cont
 
-         objects = []
+        shipPos = self.Spaceship.modelNode.getPos()
 
-         for obj in self.render.findAllMatches("**/Drone_*"):
-              objects.append(obj)
-         for obj in self.render.findAllMatches("**/Planet_*"):
-              objects.append(obj)
+        objects = []
+        objects.extend(self.render.findAllMatches("**/Drone_*"))
+        objects.extend(self.render.findAllMatches("**/Planet_*"))
 
-         for obj in objects:
-              dist = (obj.getPos() - shipPos).length()
-              if dist < closestDist:
-                    closestDist = dist
-                    closest = obj
-         if closest:
-              self.currentTarget = closest
-              self.lockText.setText(f"Locked: {closest.getName()}")
+        self.lockTargets = []
+
+        for obj in objects:
+
+            if obj.isEmpty():
+                continue
+
+            distVal = (obj.getPos() - shipPos).length()
+
+            if distVal < 5000:
+                self.lockTargets.append(obj)
+
+        if not self.lockTargets:
+            self.currentTarget = None
+            self.lockText.setText("NO TARGET")
+            return task.cont
+
+        if self.lockIndex == -1:
+            self.lockIndex = 0
+
+        self.lockIndex %= len(self.lockTargets)
+
+        candidate = self.lockTargets[self.lockIndex]
+
+        if "Drone_" in candidate.getName():
+            self.currentTarget = candidate
+        else:
+            self.currentTarget = None
+        
+        if self.currentTarget and "Drone_" in self.currentTarget.getName():
+            droneName = self.currentTarget.getName()
+            dist = (self.currentTarget.getPos() - self.Spaceship.modelNode.getPos()).length()
+
+            self.lockText.setText(f"LOCKED ON: {droneName} | DIST: {int(dist)}")
+        else:
+            self.lockText.setText("NO DRONE LOCKED")
+
+        if self.currentTarget and "Drone_" in self.currentTarget.getName():
+            self.lockBox.show()
+            self.lockBox.setPos(self.currentTarget.getPos())
+            self.lockBox.setHpr(self.currentTarget.getHpr())
+            self.lockBox.setScale(8)
+        else:
+            self.lockBox.hide()
+
+        return task.cont
+
+    def IsDrone(self, node):
+        return node and (not node.isEmpty()) and "Drone_" in node.getName()
+    
+
+    def createLockBox(self):
+
+        lines = LineSegs()
+        lines.setColor(1, 0, 0, 1)  
+
+        size = 5
+
+        lines.moveTo(-size, -size, -size)
+        lines.drawTo(size, -size, -size)
+        lines.drawTo(size, size, -size)
+        lines.drawTo(-size, size, -size)
+        lines.drawTo(-size, -size, -size)
+
+        lines.moveTo(-size, -size, size)
+        lines.drawTo(size, -size, size)
+        lines.drawTo(size, size, size)
+        lines.drawTo(-size, size, size)
+        lines.drawTo(-size, -size, size)
+
+        lines.moveTo(-size, -size, -size)
+        lines.drawTo(-size, -size, size)
+
+        lines.moveTo(size, -size, -size)
+        lines.drawTo(size, -size, size)
+
+        lines.moveTo(size, size, -size)
+        lines.drawTo(size, size, size)
+
+        lines.moveTo(-size, size, -size)
+        lines.drawTo(-size, size, size)
+
+        node = lines.create()
+        return NodePath(node)
+
+    def GetHomingDirection(self, missilePos, targetPos):
+
+        direction = targetPos - missilePos
+        distance = direction.length()
+
+        if distance > 0:
+            direction.normalize()
+
+        return direction
+    
+
+
+    def NextTarget(self):
+
+        if not self.lockOn:
+            return
+
+        if not self.lockTargets:
+            return
+
+        self.lockIndex += 1
+
+        if self.lockIndex >= len(self.lockTargets):
+            self.lockIndex = 0
+
+        self.currentTarget = self.lockTargets[self.lockIndex]
+
+        self.lockText.setText(f"LOCKED: {self.currentTarget.getName()}")
 
     def ApplyGravity(self, task):
+
+        dt = ShowBaseGlobal.globalClock.getDt()
+
+        if self.takeoffTimer > 0:
+            self.takeoffTimer -= dt
+
+            self.Spaceship.modelNode.setFluidPos
+
+        if self.isLanded:
+             self.velocity = Vec3(0, 0, 0)
+             return task.cont
+        
         planetRadius = 100
         ship = self.Spaceship.modelNode
         shipPos = ship.getPos()
-        self.canLand = False  
+        self.canLand = False
+        maxSpeed = 200
+
+        if self.velocity.length() > maxSpeed:
+            self.velocity.normalize()
+            self.velocity *= maxSpeed 
         
         for planet in self.planets:
             planetPos = planet.modelNode.getPos()
@@ -121,13 +292,30 @@ class MyApp(ShowBase):
                 direction.normalize()
                 strength = 1000 / (distance * distance)
                 pull = direction * strength
-
                 self.velocity += pull
-                ship.setFluidPos(ship.getPos() + self.velocity)
+            
+            dt = ShowBaseGlobal.globalClock.getDt()
+            ship.setFluidPos(ship.getPos() + self.velocity * dt)
             
             if distance < planetRadius + 150:
                     self.canLand = True
                     self.currentPlanet = planet
+                
+            landingDistance = planetRadius + 15
+            slowDownStart = planetRadius + 200
+            landingDistance = planetRadius + 15
+
+            if distance < slowDownStart:
+
+                t = (distance - landingDistance) / (slowDownStart - landingDistance)
+                t = max(0, min(1, t))
+                self.velocity *= t
+
+        if distance < landingDistance:
+                normal = shipPos - planetPos
+                normal.normalize()
+                vel_along_normal = normal * self.velocity.dot(normal)
+                self.velocity = vel_along_normal
         
 
         for missileName in SpaceJamClasses.Missile.fireModels:
@@ -148,7 +336,7 @@ class MyApp(ShowBase):
             if distance < 2000:
                 direction.normalize()
 
-                strength = 100000 / (distance * distance)
+                strength = 10000 / (distance * distance)
                 pull = direction * strength
 
             if hasattr(missileNode, "velocity"):
@@ -187,14 +375,20 @@ class MyApp(ShowBase):
         self.isLanded = True
 
     def TakeOff(self):
+
         if not self.isLanded:
             return
 
-        print("Taking off...")
+        ship = self.Spaceship.modelNode
+        planetPos = self.currentPlanet.modelNode.getPos()
+        shipPos = ship.getPos()
 
-        self.Spaceship.modelNode.setZ(self.Spaceship.modelNode.getZ() + 200)
-
+        direction = shipPos - planetPos
+        direction.normalize()
         self.isLanded = False
+        self.velocity = direction * 20
+        self.takeoffTimer = 1.0
+        print("Taking off...")
     
     def updateCollisions(self, task):
          self.cTrav.traverse(self.render)
@@ -215,6 +409,8 @@ class MyApp(ShowBase):
             self.Sentinal2 = SpaceJamClasses.Orbiter(self.loader, self.taskMgr, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone", 6.0, "./Assets/DroneDefender/octotoad1_auv.png", self.Planet5, 500, "Cloud", self.Spaceship)
             self.Sentinal3 = SpaceJamClasses.Orbiter(self.loader, self.taskMgr, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone", 6.0, "./Assets/DroneDefender/octotoad1_auv.png", self.Planet1, 600, "MLB", self.Spaceship)
             self.Sentinal4 = SpaceJamClasses.Orbiter(self.loader, self.taskMgr, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone", 6.0, "./Assets/DroneDefender/octotoad1_auv.png", self.Planet5, 300, "Cloud", self.Spaceship)
+            self.Wanderer1 = SpaceJamClasses.Wanderer(self.loader, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone", 6.0, "./Assets/DroneDefender/octotoad1_auv.png", self.Spaceship)
+            self.Wanderer2 = SpaceJamClasses.Wanderer(self.loader, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone", 6.0, "./Assets/DroneDefender/octotoad1_auv.png", self.Spaceship)
 
             
 
@@ -240,48 +436,44 @@ class MyApp(ShowBase):
             nickname = "Drone_" + str(SpaceJamClasses.Drone.droneCount)
             self.DrawCloudDefense(self.Planet1, nickname)
             self.DrawBaseballSeams(self.Space_Station, nickname, j, fullcycle, 2)
+            SpaceJamClasses.Drone(self.loader, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone_X", "./Assets/DroneDefender/octotoad1_auv.png", (1000, 0, 0), 10)
+            SpaceJamClasses.Drone(self.loader, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone_Y", "./Assets/DroneDefender/octotoad1_auv.png", (0, 1000, 0), 10)
+            SpaceJamClasses.Drone(self.loader, "./Assets/DroneDefender/DroneDefender.obj", self.render, "Drone_Z", "./Assets/DroneDefender/octotoad1_auv.png", (0, 0, 1000), 10)
+            
 
-
+    
     def SetCamera(self):
         self.disableMouse()
         self.camera.reparentTo(self.Spaceship.modelNode)
         self.camera.setPos(0, 1, 0)
    
+    
     def HandleInto(self, entry):
-        fromNode = entry.getFromNodePath().getName()
-        intoNode = entry.getIntoNodePath().getName()
 
-        print(f"{fromNode} hit {intoNode}")
-        if "Missile" not in fromNode:
-            return
+        fromNode = entry.getFromNodePath()
+        intoNode = entry.getIntoNodePath()
 
-        missileNode = entry.getFromNodePath().getParent()
-        hitNode = entry.getIntoNodePath().getParent()
+        fromName = fromNode.getName()
+        intoName = intoNode.getName()
 
-        if "Planet" in intoNode:
-            print("Missile hit a planet")
-            if not missileNode.isEmpty():
-                missileNode.removeNode()
-                return
+        print(f"{fromName} HIT {intoName}")
 
-        if "Drone" in intoNode:
-            print("Missile hit a drone")
+        if "Missile" in fromName:
+
+            missileNode = self.render.find("**/" + fromName)
+            hitNode = self.render.find("**/" + intoName)
+
+        if not hitNode.isEmpty():
+
             hitPos = entry.getSurfacePoint(self.render)
+            hitNode.removeNode()
+
             self.explodeNode.setPos(hitPos)
             self.Explode()
-            if not hitNode.isEmpty():
-                hitNode.removeNode()
-                if not missileNode.isEmpty():
-                    missileNode.removeNode()
-                    return
-        
-        if "Space_Station" in intoNode:
-            print("Missile hit space station")
 
         if not missileNode.isEmpty():
             missileNode.removeNode()
-            return
-
+            SpaceJamClasses.Missile.fireModels.pop(fromName, None)
        
     def DestroyObject(self, hitID, hitPosition):
               nodeID = self.render.find("**/" + hitID)
@@ -300,11 +492,11 @@ class MyApp(ShowBase):
 
 
     def ExplodeLight(self, t):
-              if t == 1.0 and self.explodeEffect:
-                     self.explodeEffect.disable()
-
-              elif t == 0:
-                     self.explodeEffect.start(self.explodeNode)
+         if t == 0:
+              self.explodeEffect.start(self.explodeNode)
+         elif t >= 1.0:
+              self.explodeEffect.disable()
+              
 
        
     def SetParticles(self):

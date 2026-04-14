@@ -11,7 +11,7 @@ from direct.interval.LerpInterval import LerpFunc
 from direct.particles.ParticleEffect import ParticleEffect
 from direct.task.Task import TaskManager
 import DefensePaths as DefensePaths
-
+from direct.interval.IntervalGlobal import Sequence 
 
 class UniverseModel(ShowBase):
        def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
@@ -65,6 +65,28 @@ class Planet(SphereCollideObj):
         self.collisionNode.node().setFromCollideMask(BitMask32.allOff())
 
 
+
+class Wanderer(SphereCollideObj):
+       numWanderers = 0
+
+       def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, modelName: str, scaleVec: Vec3, texPath: str, staringAt: Vec3):
+              super(Wanderer, self).__init__(loader, modelPath, parentNode, modelName, Vec3(0, 0, 0), 3.2)
+
+              self.modelNode.setScale(scaleVec)
+              tex = loader.loadTexture(texPath)
+              self.modelNode.setTexture(tex, 1)
+              self.staringAt = staringAt
+              Wanderer.numWanderers += 1
+
+              posInterval0 = self.modelNode.posInterval(20, Vec3(300, 6000, 500), startPos=Vec3(0, 0, 0))
+              posInterval1 = self.modelNode.posInterval(20, Vec3(700, -2000, 100), startPos=Vec3(300, 6000, 500))
+              posInterval2 = self.modelNode.posInterval(20, Vec3(0, -900, -1400), startPos=Vec3(700, -2000, 100))
+
+              self.travelRoute = Sequence(posInterval0, posInterval1, posInterval2, name = "Traveler")
+
+              self.travelRoute.loop()
+
+
 class DroneModel(ShowBase):
     droneCount = 0
     def __init__(self, loader: Loader, modelPath: str, parentNode: NodePath, nodeName: str, texPath: str, posVec: Vec3, scaleVec: float):
@@ -91,7 +113,6 @@ class Drone(SphereCollideObj):
         self.collisionNode.reparentTo(self.modelNode)
         self.collisionNode.setName(nodeName)
         self.collisionNode.setPos(0, 0, 0)
-
 
 class Orbiter(SphereCollideObj):
        numOrbits = 0
